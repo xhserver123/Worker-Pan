@@ -1,30 +1,19 @@
-name: Build and Release
-
-permissions:
-  contents: write
+name: Build and Obfuscate Worker
 
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 */1 * * *'
+  workflow_dispatch:  # 仅手动触发
 
 jobs:
   build:
-    if: |
-      github.event_name == 'workflow_dispatch' || 
-      (github.event_name == 'schedule' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out the code
         uses: actions/checkout@v4
 
-      - name: Get release version
+      - name: Get version
         id: get_version
         run: echo "version=$(jq -r .version package.json)" >> $GITHUB_OUTPUT
-
-      - name: Check release version
-        run: echo "Release version is ${{ steps.get_version.outputs.version }}"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -32,34 +21,27 @@ jobs:
           node-version: "latest"
 
       - name: Install dependencies
-        run: npm install --production
+        run: npm ci
 
       - name: Type check
         run: npm run check
-        
+
       - name: Build project
         run: npm run build
 
-      - name: Read release note
-        id: read_release
-        shell: bash
+      # 代码混淆步骤
+      - name: Obfuscate code
         run: |
-          r=$(cat RELEASE.md)         
-          r="${r//'%'/'%25'}"                               
-          r="${r//$'\n'/'%0A'}"                             
-          r="${r//$'\r'/'%0D'}"                             
-          echo "RELEASE_BODY=$r" >> $GITHUB_OUTPUT          
+          npx javascript-obfuscator dist --output dist-obfuscated --compact true --self-defending false
 
-      - name: Upload Release Assets
-        uses: svenstaro/upload-release-action@v2
+      # 打包混淆后的代码
+      - name: Package obfuscated code
+        run: tar -czf obfuscated-worker.tar.gz -C dist-obfuscated .
+
+      # 上传产物
+      - name: Upload obfuscated artifact
+        uses: actions/upload-artifact@v4
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: dist/*
-          tag: v${{ steps.get_version.outputs.version }}
-          release_name: Release v${{ steps.get_version.outputs.version }}
-          overwrite: true
-          file_glob: true
-          prerelease: ${{ github.ref != 'refs/heads/main' }}
-          promote: ${{ github.ref == 'refs/heads/main' }}
-          make_latest: ${{ github.ref == 'refs/heads/main' }}
-          body: ${{ steps.read_release.outputs.RELEASE_BODY }}
+          name: obfuscated-worker-${{ steps.get_version.outputs.version || 'unknown' }}
+          path: obfuscated-worker.tar.gz
+          retention-days: 7
